@@ -997,7 +997,9 @@ async function handleEvaluationSubmit(form) {
 }
 
 function bindEvents() {
-  elements.refreshBtn.addEventListener('click', loadAll);
+  if (elements.refreshBtn) {
+    elements.refreshBtn.addEventListener('click', loadAll);
+  }
 
   elements.studentSelect.addEventListener('change', async (event) => {
     state.selectedStudentId = event.target.value;
