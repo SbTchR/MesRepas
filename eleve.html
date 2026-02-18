@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RepasParle - Élève</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700&family=Lexend:wght@300;400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a href="index.html" class="top-link">Accueil</a>
+      <h1>Vue élève</h1>
+      <button id="refreshStudentBtn" class="ghost-btn" type="button">Actualiser</button>
+    </header>
+
+    <main class="app-shell app-student">
+      <section id="firebaseWarning" class="panel warning hidden"></section>
+
+      <section class="panel panel-step">
+        <h2>1. Je choisis mon nom</h2>
+        <div class="row-wrap">
+          <select id="studentSelect" class="input" aria-label="Choisir un élève">
+            <option value="">Choisir...</option>
+          </select>
+          <p id="studentHint" class="hint">Nom nécessaire pour continuer.</p>
+        </div>
+      </section>
+
+      <section class="panel panel-step">
+        <h2>2. Nouveau repas</h2>
+        <p id="editMealHint" class="hint hidden"></p>
+
+        <div class="stack">
+          <label class="file-label" for="mealTitleInput">Nom du repas</label>
+          <input
+            id="mealTitleInput"
+            class="input"
+            type="text"
+            maxlength="60"
+            placeholder="Ex: lundi midi"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="stack">
+          <p id="existingPhotosTitle" class="inline-title hidden">Photos actuelles</p>
+          <div id="existingPhotoList" class="media-grid"></div>
+
+          <label class="file-label" for="photoInput">Ajouter photo(s)</label>
+          <input id="photoInput" type="file" accept="image/*" capture="environment" multiple />
+          <div id="photoDraftList" class="media-grid"></div>
+        </div>
+
+        <div class="stack">
+          <p id="existingAudiosTitle" class="inline-title hidden">Audios actuels</p>
+          <div id="existingAudioList" class="audio-list"></div>
+
+          <p class="inline-title">Ajouter audio(s)</p>
+          <div class="row-wrap">
+            <button id="recordBtn" class="accent-btn" type="button">Démarrer audio</button>
+            <input id="audioInput" type="file" accept="audio/*" capture="microphone" multiple />
+          </div>
+          <div id="audioDraftList" class="audio-list"></div>
+        </div>
+
+        <div class="row-wrap actions-end student-save-row">
+          <button id="cancelEditMealBtn" class="ghost-btn hidden" type="button">Annuler modif</button>
+          <button id="clearDraftBtn" class="ghost-btn" type="button">Effacer brouillon</button>
+          <button id="saveMealBtn" class="primary-btn" type="button">Enregistrer repas</button>
+        </div>
+
+        <div id="uploadProgressWrap" class="upload-progress hidden" aria-live="polite">
+          <div class="upload-progress-head">
+            <span>Envoi</span>
+            <span id="uploadProgressText">0%</span>
+          </div>
+          <div class="upload-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+            <div id="uploadProgressFill" class="upload-progress-fill"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-step">
+        <h2>3. Mes repas</h2>
+        <div id="mealsList" class="cards-list"></div>
+      </section>
+
+      <section class="panel panel-step">
+        <h2>4. Évaluations à faire</h2>
+        <div id="evaluationList" class="cards-list"></div>
+      </section>
+
+      <section class="panel panel-step">
+        <h2>5. Évaluations reçues</h2>
+        <div id="receivedEvaluationList" class="cards-list"></div>
+      </section>
+    </main>
+
+    <div id="imageModal" class="image-modal hidden" role="dialog" aria-modal="true" aria-label="Image">
+      <button id="imageModalClose" class="image-modal-close" type="button" data-close-lightbox>
+        Fermer
+      </button>
+      <img id="imageModalImg" class="image-modal-img" alt="" />
+      <p id="imageModalCaption" class="image-modal-caption"></p>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script type="module" src="js/student.js"></script>
+  </body>
+</html>
