@@ -40,13 +40,7 @@ const elements = {
   existingAudiosTitle: document.getElementById('existingAudiosTitle'),
   existingAudioList: document.getElementById('existingAudioList'),
   photoActionBtn: document.getElementById('photoActionBtn'),
-  photoActionMenu: document.getElementById('photoActionMenu'),
-  photoTakeBtn: document.getElementById('photoTakeBtn'),
-  photoLibraryBtn: document.getElementById('photoLibraryBtn'),
-  photoFileBtn: document.getElementById('photoFileBtn'),
-  photoCameraInput: document.getElementById('photoCameraInput'),
-  photoLibraryInput: document.getElementById('photoLibraryInput'),
-  photoFileInput: document.getElementById('photoFileInput'),
+  photoInput: document.getElementById('photoInput'),
   photoPrivacyHint: document.getElementById('photoPrivacyHint'),
   photoPrivacyReview: document.getElementById('photoPrivacyReview'),
   photoPrivacyReviewList: document.getElementById('photoPrivacyReviewList'),
@@ -86,8 +80,7 @@ const state = {
   recordingMimeType: '',
   processingAudio: false,
   processingPhotos: false,
-  pendingPhotoReview: [],
-  photoSourceMenuOpen: false
+  pendingPhotoReview: []
 };
 
 function getSelectedStudent() {
@@ -153,25 +146,6 @@ function isProcessingMedia() {
 
 function isRecordingAudio() {
   return Boolean(state.mediaRecorder && state.mediaRecorder.state === 'recording');
-}
-
-function setPhotoSourceMenuOpen(open) {
-  state.photoSourceMenuOpen = Boolean(open);
-
-  if (!elements.photoActionMenu || !elements.photoActionBtn) {
-    return;
-  }
-
-  elements.photoActionMenu.classList.toggle('hidden', !state.photoSourceMenuOpen);
-  elements.photoActionBtn.setAttribute('aria-expanded', state.photoSourceMenuOpen ? 'true' : 'false');
-}
-
-function togglePhotoSourceMenu() {
-  setPhotoSourceMenuOpen(!state.photoSourceMenuOpen);
-}
-
-function closePhotoSourceMenu() {
-  setPhotoSourceMenuOpen(false);
 }
 
 function syncRecordButtonLabel() {
@@ -253,6 +227,7 @@ function disableAll() {
     elements.studentSelect,
     elements.mealTitleInput,
     elements.photoActionBtn,
+    elements.photoInput,
     elements.audioInput,
     elements.recordBtn,
     elements.cancelEditMealBtn,
@@ -285,14 +260,16 @@ function updateEditModeUI() {
 
 function updateControlsState() {
   const canWork = Boolean(state.selectedStudentId);
-  const photoSelectionLocked = isProcessingMedia() || hasPendingPhotoReview();
   elements.studentSelect.disabled = isProcessingMedia() || hasPendingPhotoReview();
   if (elements.refreshBtn) {
     elements.refreshBtn.disabled = isProcessingMedia() || hasPendingPhotoReview();
   }
   elements.mealTitleInput.disabled = !canWork || isProcessingMedia() || hasPendingPhotoReview();
   if (elements.photoActionBtn) {
-    elements.photoActionBtn.disabled = !canWork || photoSelectionLocked || !supportsImageSanitization();
+    elements.photoActionBtn.disabled = !canWork || isProcessingMedia() || hasPendingPhotoReview() || !supportsImageSanitization();
+  }
+  if (elements.photoInput) {
+    elements.photoInput.disabled = !canWork || isProcessingMedia() || hasPendingPhotoReview() || !supportsImageSanitization();
   }
   if (elements.audioInput) {
     elements.audioInput.disabled = !canWork || isProcessingMedia() || hasPendingPhotoReview();
@@ -314,11 +291,6 @@ function updateControlsState() {
     elements.cancelPhotoReviewBtn.disabled = isProcessingMedia() || !hasPendingPhotoReview();
   }
   syncRecordButtonLabel();
-  if (!canWork || photoSelectionLocked || !supportsImageSanitization()) {
-    closePhotoSourceMenu();
-  } else {
-    setPhotoSourceMenuOpen(state.photoSourceMenuOpen);
-  }
   updatePhotoPrivacyHint();
   updateVoicePrivacyHint();
 }
@@ -962,11 +934,9 @@ function bindFileInputs() {
     await preparePhotosForReview(files);
   };
 
-  [elements.photoCameraInput, elements.photoLibraryInput, elements.photoFileInput].forEach((input) => {
-    if (input) {
-      input.addEventListener('change', handlePhotoSelection);
-    }
-  });
+  if (elements.photoInput) {
+    elements.photoInput.addEventListener('change', handlePhotoSelection);
+  }
 
   if (elements.audioInput) {
     elements.audioInput.addEventListener('change', async (event) => {
@@ -1053,7 +1023,6 @@ function triggerPhotoInput(input) {
     return;
   }
 
-  closePhotoSourceMenu();
   input.click();
 }
 
@@ -1463,31 +1432,8 @@ function bindEvents() {
   }
 
   if (elements.photoActionBtn) {
-    elements.photoActionBtn.addEventListener('click', togglePhotoSourceMenu);
+    elements.photoActionBtn.addEventListener('click', () => triggerPhotoInput(elements.photoInput));
   }
-
-  if (elements.photoTakeBtn) {
-    elements.photoTakeBtn.addEventListener('click', () => triggerPhotoInput(elements.photoCameraInput));
-  }
-
-  if (elements.photoLibraryBtn) {
-    elements.photoLibraryBtn.addEventListener('click', () => triggerPhotoInput(elements.photoLibraryInput));
-  }
-
-  if (elements.photoFileBtn) {
-    elements.photoFileBtn.addEventListener('click', () => triggerPhotoInput(elements.photoFileInput));
-  }
-
-  document.addEventListener('click', (event) => {
-    if (!state.photoSourceMenuOpen) {
-      return;
-    }
-
-    const insidePicker = event.target.closest('.photo-source-picker');
-    if (!insidePicker) {
-      closePhotoSourceMenu();
-    }
-  });
 
   elements.saveMealBtn.addEventListener('click', handleSaveMeal);
 

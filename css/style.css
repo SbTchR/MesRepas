@@ -278,19 +278,6 @@ button:disabled {
   max-width: 100%;
 }
 
-.photo-action-menu {
-  display: grid;
-  gap: 0.5rem;
-  padding: 0.7rem;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #fbfdfb;
-}
-
-.photo-action-menu button {
-  text-align: left;
-}
-
 .picker-input-hidden {
   position: absolute;
   width: 1px;
