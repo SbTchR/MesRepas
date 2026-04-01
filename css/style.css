@@ -250,6 +250,15 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.hint-voice {
+  max-width: 52ch;
+}
+
+.hint-voice.is-warning {
+  color: var(--danger);
+  font-weight: 600;
+}
+
 .warning {
   border-color: #e3d18a;
   background: var(--warning-bg);

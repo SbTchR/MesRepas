@@ -25,6 +25,8 @@ import {
   initImageLightbox
 } from './app-common.js';
 
+import { anonymizeAudioFile, supportsVoiceAnonymization } from './audio-privacy.js';
+
 const elements = {
   firebaseWarning: document.getElementById('firebaseWarning'),
   refreshBtn: document.getElementById('refreshStudentBtn'),
@@ -41,6 +43,7 @@ const elements = {
   audioInput: document.getElementById('audioInput'),
   audioDraftList: document.getElementById('audioDraftList'),
   recordBtn: document.getElementById('recordBtn'),
+  voicePrivacyHint: document.getElementById('voicePrivacyHint'),
   cancelEditMealBtn: document.getElementById('cancelEditMealBtn'),
   clearDraftBtn: document.getElementById('clearDraftBtn'),
   saveMealBtn: document.getElementById('saveMealBtn'),
@@ -66,7 +69,9 @@ const state = {
   editingExistingAudios: [],
   mediaRecorder: null,
   recorderStream: null,
-  recordingChunks: []
+  recordingChunks: [],
+  recordingMimeType: '',
+  processingAudio: false
 };
 
 function getSelectedStudent() {
@@ -114,6 +119,65 @@ function setSaveButtonLabel(label) {
   elements.saveMealBtn.textContent = label;
 }
 
+function isRecordingAudio() {
+  return Boolean(state.mediaRecorder && state.mediaRecorder.state === 'recording');
+}
+
+function syncRecordButtonLabel() {
+  if (!elements.recordBtn) {
+    return;
+  }
+
+  if (state.processingAudio) {
+    elements.recordBtn.textContent = 'Traitement audio...';
+    return;
+  }
+
+  elements.recordBtn.textContent = isRecordingAudio() ? 'Stop audio' : 'Démarrer audio';
+}
+
+function updateVoicePrivacyHint() {
+  if (!elements.voicePrivacyHint) {
+    return;
+  }
+
+  let message = "L'audio enregistré ici est transformé sur cet appareil avant l'envoi.";
+  let warning = false;
+
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    message = "Cet appareil ne permet pas l'enregistrement audio direct.";
+    warning = true;
+  } else if (!supportsVoiceAnonymization()) {
+    message =
+      "Cet appareil ne peut pas anonymiser la voix localement. L'enregistrement audio direct est désactivé pour éviter l'envoi de la voix brute.";
+    warning = true;
+  }
+
+  elements.voicePrivacyHint.textContent = message;
+  elements.voicePrivacyHint.classList.toggle('is-warning', warning);
+}
+
+function pickRecordingMimeType() {
+  if (!window.MediaRecorder || typeof window.MediaRecorder.isTypeSupported !== 'function') {
+    return '';
+  }
+
+  const candidates = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm'];
+  return candidates.find((mimeType) => window.MediaRecorder.isTypeSupported(mimeType)) || '';
+}
+
+function releaseRecorder() {
+  if (state.recorderStream) {
+    state.recorderStream.getTracks().forEach((track) => track.stop());
+  }
+
+  state.recorderStream = null;
+  state.mediaRecorder = null;
+  state.recordingChunks = [];
+  state.recordingMimeType = '';
+  syncRecordButtonLabel();
+}
+
 function disableAll() {
   [
     elements.studentSelect,
@@ -151,13 +215,22 @@ function updateEditModeUI() {
 
 function updateControlsState() {
   const canWork = Boolean(state.selectedStudentId);
-  elements.mealTitleInput.disabled = !canWork;
-  elements.photoInput.disabled = !canWork;
-  elements.audioInput.disabled = !canWork;
-  elements.cancelEditMealBtn.disabled = !canWork;
-  elements.clearDraftBtn.disabled = !canWork;
-  elements.recordBtn.disabled = !canWork || !navigator.mediaDevices || !window.MediaRecorder;
-  elements.saveMealBtn.disabled = !isReadyForSave();
+  elements.studentSelect.disabled = state.processingAudio;
+  if (elements.refreshBtn) {
+    elements.refreshBtn.disabled = state.processingAudio;
+  }
+  elements.mealTitleInput.disabled = !canWork || state.processingAudio;
+  elements.photoInput.disabled = !canWork || state.processingAudio;
+  if (elements.audioInput) {
+    elements.audioInput.disabled = !canWork || state.processingAudio;
+  }
+  elements.cancelEditMealBtn.disabled = !canWork || state.processingAudio;
+  elements.clearDraftBtn.disabled = !canWork || state.processingAudio;
+  elements.recordBtn.disabled =
+    !canWork || state.processingAudio || !navigator.mediaDevices || !window.MediaRecorder || !supportsVoiceAnonymization();
+  elements.saveMealBtn.disabled = state.processingAudio || !isReadyForSave();
+  syncRecordButtonLabel();
+  updateVoicePrivacyHint();
 }
 
 function renderStudentSelect() {
@@ -694,63 +767,134 @@ function bindFileInputs() {
     updateControlsState();
   });
 
-  elements.audioInput.addEventListener('change', (event) => {
-    const files = [...(event.target.files || [])].filter((file) => file.type.startsWith('audio/'));
-    state.draftAudios.push(...files);
-    elements.audioInput.value = '';
+  if (elements.audioInput) {
+    elements.audioInput.addEventListener('change', async (event) => {
+      const files = [...(event.target.files || [])].filter((file) => file.type.startsWith('audio/'));
+      elements.audioInput.value = '';
+      await addAudioFilesToDraft(files);
+    });
+  }
+}
+
+async function addAudioFilesToDraft(files) {
+  if (!files.length) {
+    return;
+  }
+
+  state.processingAudio = true;
+  updateControlsState();
+
+  let addedCount = 0;
+
+  try {
+    for (const file of files) {
+      const anonymizedFile = await anonymizeAudioFile(file);
+      state.draftAudios.push(anonymizedFile);
+      addedCount += 1;
+    }
+
     renderDraftAudios();
+
+    if (addedCount) {
+      showToast(addedCount > 1 ? `${addedCount} audios anonymisés ajoutés` : 'Audio anonymisé ajouté');
+    }
+  } catch (error) {
+    console.error('Audio anonymization failed:', error);
+    showToast('Transformation audio impossible. Audio non conservé.', 'error');
+  } finally {
+    state.processingAudio = false;
     updateControlsState();
-  });
+  }
+}
+
+async function finalizeRecordedAudio(chunks, mimeType) {
+  if (!chunks.length) {
+    showToast('Audio vide', 'error');
+    return;
+  }
+
+  state.processingAudio = true;
+  updateControlsState();
+
+  try {
+    const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+    const extension = mimeType?.includes('ogg') ? 'ogg' : mimeType?.includes('mp4') ? 'm4a' : 'webm';
+    const rawFile = new File([blob], `audio-${Date.now()}.${extension}`, {
+      type: mimeType || 'audio/webm',
+      lastModified: Date.now()
+    });
+    const anonymizedFile = await anonymizeAudioFile(rawFile);
+
+    state.draftAudios.push(anonymizedFile);
+    renderDraftAudios();
+    showToast('Audio anonymisé ajouté');
+  } catch (error) {
+    console.error('Recorded audio anonymization failed:', error);
+    showToast('Transformation audio impossible. Audio non conservé.', 'error');
+  } finally {
+    state.processingAudio = false;
+    updateControlsState();
+  }
 }
 
 async function startRecording() {
-  if (!navigator.mediaDevices || !window.MediaRecorder) {
-    showToast('Audio direct non dispo. Utilise fichier audio.', 'error');
+  if (!navigator.mediaDevices || !window.MediaRecorder || !supportsVoiceAnonymization()) {
+    showToast("Enregistrement audio direct indisponible sur cet appareil.", 'error');
     return;
   }
 
   try {
-    state.recorderStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    state.recorderStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
     state.recordingChunks = [];
-    state.mediaRecorder = new MediaRecorder(state.recorderStream);
+    state.recordingMimeType = pickRecordingMimeType();
+    state.mediaRecorder = state.recordingMimeType
+      ? new MediaRecorder(state.recorderStream, { mimeType: state.recordingMimeType })
+      : new MediaRecorder(state.recorderStream);
+    const recorder = state.mediaRecorder;
 
-    state.mediaRecorder.ondataavailable = (event) => {
+    recorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
         state.recordingChunks.push(event.data);
       }
     };
 
-    state.mediaRecorder.onstop = () => {
-      const mimeType = state.mediaRecorder?.mimeType || 'audio/webm';
-      const blob = new Blob(state.recordingChunks, { type: mimeType });
-      const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'm4a' : 'webm';
-      const file = new File([blob], `audio-${Date.now()}.${ext}`, { type: mimeType });
-      state.draftAudios.push(file);
-      renderDraftAudios();
+    recorder.onerror = (event) => {
+      console.error('MediaRecorder error:', event?.error || event);
+      releaseRecorder();
+      state.processingAudio = false;
       updateControlsState();
-
-      if (state.recorderStream) {
-        state.recorderStream.getTracks().forEach((track) => track.stop());
-      }
-      state.recorderStream = null;
-      state.mediaRecorder = null;
-      state.recordingChunks = [];
-      elements.recordBtn.textContent = 'Démarrer audio';
+      showToast('Erreur enregistrement micro', 'error');
     };
 
-    state.mediaRecorder.start();
-    elements.recordBtn.textContent = 'Stop audio';
+    recorder.onstop = async () => {
+      const chunks = [...state.recordingChunks];
+      const mimeType = state.recordingMimeType || recorder.mimeType || 'audio/webm';
+      releaseRecorder();
+      await finalizeRecordedAudio(chunks, mimeType);
+    };
+
+    recorder.start();
+    updateControlsState();
     showToast('Enregistrement...');
   } catch (error) {
     console.error(error);
+    releaseRecorder();
     showToast('Micro refusé', 'error');
   }
 }
 
 function stopRecording() {
   if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+    state.processingAudio = true;
+    updateControlsState();
     state.mediaRecorder.stop();
-    showToast('Audio ajouté');
+    showToast('Transformation locale...');
   }
 }
 
