@@ -369,7 +369,24 @@ function renderPhotoReview() {
 
     const details = document.createElement('div');
 
-    if (item.removedMetadata.length) {
+    if (item.metadataGroups?.length) {
+      item.metadataGroups.forEach((group) => {
+        const title = document.createElement('p');
+        title.className = 'privacy-review-group-title';
+        title.textContent = group.title;
+
+        const list = document.createElement('ul');
+        list.className = 'privacy-review-meta-list';
+
+        group.items.forEach((entry) => {
+          const li = document.createElement('li');
+          li.textContent = `${entry.label}: ${entry.value}`;
+          list.appendChild(li);
+        });
+
+        details.append(title, list);
+      });
+    } else if (item.removedMetadata.length) {
       const list = document.createElement('ul');
       list.className = 'privacy-review-meta-list';
 
@@ -384,7 +401,9 @@ function renderPhotoReview() {
       const note = document.createElement('p');
       note.className = 'privacy-review-note';
       note.textContent =
-        "Aucune metadonnee lisible n'a ete detectee, mais l'image sera quand meme reencodee pour retirer les balises cachees.";
+        item.formatLabel && !['JPEG', 'PNG'].includes(item.formatLabel)
+          ? `Aucune metadonnee lisible n'a ete detectee dans ce fichier ${item.formatLabel}. Sur iPhone, le navigateur peut fournir une image deja simplifiee ou dans un format moins facile a lire, mais l'image sera quand meme reencodee pour retirer les balises cachees.`
+          : "Aucune metadonnee lisible n'a ete detectee, mais l'image sera quand meme reencodee pour retirer les balises cachees.";
       details.appendChild(note);
     }
 
@@ -926,6 +945,7 @@ async function preparePhotosForReview(files) {
           originalName: file.name,
           sanitizedFile: sanitized.sanitizedFile,
           removedMetadata: sanitized.removedMetadata,
+          metadataGroups: sanitized.metadataGroups,
           formatLabel: sanitized.formatLabel
         });
       } catch (error) {

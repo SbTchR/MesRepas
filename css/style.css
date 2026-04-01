@@ -328,6 +328,12 @@ button:disabled {
   color: var(--ink);
 }
 
+.privacy-review-group-title {
+  margin-top: 0.25rem;
+  font-weight: 700;
+  color: var(--primary-dark);
+}
+
 .privacy-review-actions {
   margin-top: 0.1rem;
 }

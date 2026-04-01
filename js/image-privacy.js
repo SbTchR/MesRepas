@@ -68,6 +68,14 @@ const ORIENTATION_LABELS = {
   8: 'rotation 270 degres'
 };
 
+const METADATA_GROUP_TITLES = {
+  device: 'Appareil et prise de vue',
+  location: 'Localisation',
+  date: 'Dates et heures',
+  author: 'Auteur et commentaire',
+  technical: 'Autres infos techniques'
+};
+
 export function supportsImageSanitization() {
   return Boolean(
     typeof window !== 'undefined' &&
@@ -113,6 +121,7 @@ export async function prepareSanitizedImage(file) {
     return {
       sanitizedFile,
       removedMetadata: metadata.items,
+      metadataGroups: groupMetadataForDisplay(metadata.items),
       formatLabel: metadata.formatLabel
     };
   } finally {
@@ -419,6 +428,9 @@ function buildExifItems(entries) {
     }
 
     const label = resolveTagLabel(entry.ifdName, entry.tag);
+    if (!label) {
+      return;
+    }
     const value = formatExifEntry(entry, entryMap);
 
     if (value) {
@@ -436,12 +448,69 @@ function resolveTagLabel(ifdName, tag) {
     GPS: GPS_TAGS
   };
 
-  const label = dictionaries[ifdName]?.[tag];
-  if (label) {
-    return label;
+  return dictionaries[ifdName]?.[tag] || '';
+}
+
+function groupMetadataForDisplay(items) {
+  const groups = new Map();
+
+  items.forEach((item) => {
+    const key = metadataGroupKeyFor(item.label);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(item);
+  });
+
+  return ['location', 'device', 'date', 'author', 'technical']
+    .filter((key) => groups.has(key))
+    .map((key) => ({
+      key,
+      title: METADATA_GROUP_TITLES[key],
+      items: groups.get(key)
+    }));
+}
+
+function metadataGroupKeyFor(label) {
+  if (
+    label.includes('GPS') ||
+    label.includes('latitude') ||
+    label.includes('longitude') ||
+    label.includes('Altitude')
+  ) {
+    return 'location';
   }
 
-  return `${ifdName} 0x${tag.toString(16).padStart(4, '0')}`;
+  if (
+    label.includes('Date') ||
+    label.includes('heure') ||
+    label.includes('Heure')
+  ) {
+    return 'date';
+  }
+
+  if (
+    label.includes('Auteur') ||
+    label.includes('Copyright') ||
+    label.includes('Commentaire') ||
+    label.includes('Proprietaire')
+  ) {
+    return 'author';
+  }
+
+  if (
+    label.includes('appareil') ||
+    label.includes('Modele') ||
+    label.includes('Objectif') ||
+    label.includes('Focale') ||
+    label.includes('ISO') ||
+    label.includes('Ouverture') ||
+    label.includes('Temps exposition')
+  ) {
+    return 'device';
+  }
+
+  return 'technical';
 }
 
 function formatExifEntry(entry, entryMap) {
