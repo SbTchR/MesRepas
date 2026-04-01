@@ -46,8 +46,38 @@
           <p id="existingPhotosTitle" class="inline-title hidden">Photos actuelles</p>
           <div id="existingPhotoList" class="media-grid"></div>
 
-          <label class="file-label" for="photoInput">Ajouter photo(s)</label>
-          <input id="photoInput" type="file" accept="image/*" capture="environment" multiple />
+          <p class="file-label">Ajouter photo(s)</p>
+          <div class="photo-source-picker">
+            <button
+              id="photoActionBtn"
+              class="accent-btn photo-action-btn"
+              type="button"
+              aria-expanded="false"
+              aria-controls="photoActionMenu"
+            >
+              Ajouter une photo
+            </button>
+            <div id="photoActionMenu" class="photo-action-menu hidden">
+              <button id="photoTakeBtn" class="ghost-btn" type="button">Prendre une photo</button>
+              <button id="photoLibraryBtn" class="ghost-btn" type="button">Choisir dans la phototheque</button>
+              <button id="photoFileBtn" class="ghost-btn" type="button">Choisir un fichier</button>
+            </div>
+            <input
+              id="photoCameraInput"
+              class="picker-input-hidden"
+              type="file"
+              accept="image/*"
+              capture="environment"
+            />
+            <input
+              id="photoLibraryInput"
+              class="picker-input-hidden"
+              type="file"
+              accept="image/*"
+              multiple
+            />
+            <input id="photoFileInput" class="picker-input-hidden" type="file" multiple />
+          </div>
           <p id="photoPrivacyHint" class="hint hint-photo" aria-live="polite"></p>
           <section id="photoPrivacyReview" class="privacy-review hidden" aria-live="polite">
             <p class="privacy-review-title">Infos cachees retirees avant ajout</p>

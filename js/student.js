@@ -39,7 +39,14 @@ const elements = {
   existingPhotoList: document.getElementById('existingPhotoList'),
   existingAudiosTitle: document.getElementById('existingAudiosTitle'),
   existingAudioList: document.getElementById('existingAudioList'),
-  photoInput: document.getElementById('photoInput'),
+  photoActionBtn: document.getElementById('photoActionBtn'),
+  photoActionMenu: document.getElementById('photoActionMenu'),
+  photoTakeBtn: document.getElementById('photoTakeBtn'),
+  photoLibraryBtn: document.getElementById('photoLibraryBtn'),
+  photoFileBtn: document.getElementById('photoFileBtn'),
+  photoCameraInput: document.getElementById('photoCameraInput'),
+  photoLibraryInput: document.getElementById('photoLibraryInput'),
+  photoFileInput: document.getElementById('photoFileInput'),
   photoPrivacyHint: document.getElementById('photoPrivacyHint'),
   photoPrivacyReview: document.getElementById('photoPrivacyReview'),
   photoPrivacyReviewList: document.getElementById('photoPrivacyReviewList'),
@@ -79,7 +86,8 @@ const state = {
   recordingMimeType: '',
   processingAudio: false,
   processingPhotos: false,
-  pendingPhotoReview: []
+  pendingPhotoReview: [],
+  photoSourceMenuOpen: false
 };
 
 function getSelectedStudent() {
@@ -104,6 +112,14 @@ function evaluationFeedbackOf(evaluation) {
 
 function isEditingMeal() {
   return Boolean(state.editingMealId);
+}
+
+function isLikelyImageFile(file) {
+  if (String(file?.type || '').toLowerCase().startsWith('image/')) {
+    return true;
+  }
+
+  return /\.(jpg|jpeg|png|webp|heic|heif|avif)$/i.test(String(file?.name || ''));
 }
 
 function totalMediaInForm() {
@@ -137,6 +153,25 @@ function isProcessingMedia() {
 
 function isRecordingAudio() {
   return Boolean(state.mediaRecorder && state.mediaRecorder.state === 'recording');
+}
+
+function setPhotoSourceMenuOpen(open) {
+  state.photoSourceMenuOpen = Boolean(open);
+
+  if (!elements.photoActionMenu || !elements.photoActionBtn) {
+    return;
+  }
+
+  elements.photoActionMenu.classList.toggle('hidden', !state.photoSourceMenuOpen);
+  elements.photoActionBtn.setAttribute('aria-expanded', state.photoSourceMenuOpen ? 'true' : 'false');
+}
+
+function togglePhotoSourceMenu() {
+  setPhotoSourceMenuOpen(!state.photoSourceMenuOpen);
+}
+
+function closePhotoSourceMenu() {
+  setPhotoSourceMenuOpen(false);
 }
 
 function syncRecordButtonLabel() {
@@ -217,7 +252,7 @@ function disableAll() {
   [
     elements.studentSelect,
     elements.mealTitleInput,
-    elements.photoInput,
+    elements.photoActionBtn,
     elements.audioInput,
     elements.recordBtn,
     elements.cancelEditMealBtn,
@@ -250,13 +285,15 @@ function updateEditModeUI() {
 
 function updateControlsState() {
   const canWork = Boolean(state.selectedStudentId);
+  const photoSelectionLocked = isProcessingMedia() || hasPendingPhotoReview();
   elements.studentSelect.disabled = isProcessingMedia() || hasPendingPhotoReview();
   if (elements.refreshBtn) {
     elements.refreshBtn.disabled = isProcessingMedia() || hasPendingPhotoReview();
   }
   elements.mealTitleInput.disabled = !canWork || isProcessingMedia() || hasPendingPhotoReview();
-  elements.photoInput.disabled =
-    !canWork || isProcessingMedia() || hasPendingPhotoReview() || !supportsImageSanitization();
+  if (elements.photoActionBtn) {
+    elements.photoActionBtn.disabled = !canWork || photoSelectionLocked || !supportsImageSanitization();
+  }
   if (elements.audioInput) {
     elements.audioInput.disabled = !canWork || isProcessingMedia() || hasPendingPhotoReview();
   }
@@ -277,6 +314,11 @@ function updateControlsState() {
     elements.cancelPhotoReviewBtn.disabled = isProcessingMedia() || !hasPendingPhotoReview();
   }
   syncRecordButtonLabel();
+  if (!canWork || photoSelectionLocked || !supportsImageSanitization()) {
+    closePhotoSourceMenu();
+  } else {
+    setPhotoSourceMenuOpen(state.photoSourceMenuOpen);
+  }
   updatePhotoPrivacyHint();
   updateVoicePrivacyHint();
 }
@@ -909,10 +951,21 @@ async function loadAll() {
 }
 
 function bindFileInputs() {
-  elements.photoInput.addEventListener('change', async (event) => {
-    const files = [...(event.target.files || [])].filter((file) => file.type.startsWith('image/'));
-    elements.photoInput.value = '';
+  const handlePhotoSelection = async (event) => {
+    const files = [...(event.target.files || [])].filter(isLikelyImageFile);
+    const hadFiles = Boolean(event.target.files?.length);
+    event.target.value = '';
+    if (hadFiles && !files.length) {
+      showToast('Choisis un fichier image.', 'error');
+      return;
+    }
     await preparePhotosForReview(files);
+  };
+
+  [elements.photoCameraInput, elements.photoLibraryInput, elements.photoFileInput].forEach((input) => {
+    if (input) {
+      input.addEventListener('change', handlePhotoSelection);
+    }
   });
 
   if (elements.audioInput) {
@@ -993,6 +1046,15 @@ function cancelPendingPhotoReview() {
   renderPhotoReview();
   updateControlsState();
   showToast('Ajout photo annule');
+}
+
+function triggerPhotoInput(input) {
+  if (!input || input.disabled) {
+    return;
+  }
+
+  closePhotoSourceMenu();
+  input.click();
 }
 
 async function addAudioFilesToDraft(files) {
@@ -1399,6 +1461,33 @@ function bindEvents() {
   if (elements.cancelPhotoReviewBtn) {
     elements.cancelPhotoReviewBtn.addEventListener('click', cancelPendingPhotoReview);
   }
+
+  if (elements.photoActionBtn) {
+    elements.photoActionBtn.addEventListener('click', togglePhotoSourceMenu);
+  }
+
+  if (elements.photoTakeBtn) {
+    elements.photoTakeBtn.addEventListener('click', () => triggerPhotoInput(elements.photoCameraInput));
+  }
+
+  if (elements.photoLibraryBtn) {
+    elements.photoLibraryBtn.addEventListener('click', () => triggerPhotoInput(elements.photoLibraryInput));
+  }
+
+  if (elements.photoFileBtn) {
+    elements.photoFileBtn.addEventListener('click', () => triggerPhotoInput(elements.photoFileInput));
+  }
+
+  document.addEventListener('click', (event) => {
+    if (!state.photoSourceMenuOpen) {
+      return;
+    }
+
+    const insidePicker = event.target.closest('.photo-source-picker');
+    if (!insidePicker) {
+      closePhotoSourceMenu();
+    }
+  });
 
   elements.saveMealBtn.addEventListener('click', handleSaveMeal);
 

@@ -76,6 +76,16 @@ const METADATA_GROUP_TITLES = {
   technical: 'Autres infos techniques'
 };
 
+const IMAGE_EXTENSION_MIME_TYPES = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+  avif: 'image/avif'
+};
+
 export function supportsImageSanitization() {
   return Boolean(
     typeof window !== 'undefined' &&
@@ -93,12 +103,12 @@ export async function prepareSanitizedImage(file) {
     throw new Error('IMAGE_SANITIZATION_UNSUPPORTED');
   }
 
-  const sourceType = String(file?.type || '').toLowerCase();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const sourceType = resolveImageSourceType(file, bytes);
   if (!sourceType.startsWith('image/')) {
     throw new Error('IMAGE_SANITIZATION_INVALID_TYPE');
   }
 
-  const bytes = new Uint8Array(await file.arrayBuffer());
   const metadata = extractImageMetadata(bytes, sourceType);
   const loaded = await loadImageSource(file);
 
@@ -151,6 +161,34 @@ function extractImageMetadata(bytes, sourceType) {
     orientation: 1,
     formatLabel: sourceType.replace('image/', '').toUpperCase() || 'IMAGE'
   };
+}
+
+function resolveImageSourceType(file, bytes) {
+  const declaredType = String(file?.type || '').toLowerCase();
+  if (declaredType.startsWith('image/')) {
+    return declaredType;
+  }
+
+  const extensionType = inferImageMimeTypeFromFilename(file?.name);
+  if (extensionType) {
+    return extensionType;
+  }
+
+  if (isJpeg(bytes, '')) return 'image/jpeg';
+  if (isPng(bytes, '')) return 'image/png';
+  if (isWebp(bytes, '')) return 'image/webp';
+  if (isIsoBmffImage(bytes, '')) return detectIsoBmffMimeType(bytes);
+
+  return '';
+}
+
+function inferImageMimeTypeFromFilename(filename) {
+  const match = /\.([a-z0-9]+)$/i.exec(String(filename || ''));
+  if (!match) {
+    return '';
+  }
+
+  return IMAGE_EXTENSION_MIME_TYPES[match[1].toLowerCase()] || '';
 }
 
 function isJpeg(bytes, sourceType) {
@@ -481,6 +519,18 @@ function detectIsoBmffFormatLabel(view, ftypBox, sourceType) {
   }
 
   return sourceType.replace('image/', '').toUpperCase() || 'IMAGE';
+}
+
+function detectIsoBmffMimeType(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const boxes = readIsoBoxes(view, 0, view.byteLength);
+  const ftypBox = boxes.find((box) => box.type === 'ftyp');
+  const label = detectIsoBmffFormatLabel(view, ftypBox, '');
+
+  if (label === 'AVIF') return 'image/avif';
+  if (label === 'HEIC') return 'image/heic';
+  if (label === 'HEIF') return 'image/heif';
+  return 'image/heif';
 }
 
 function parseIsoItemInfos(view, iinfBox) {
