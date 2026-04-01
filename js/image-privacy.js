@@ -138,6 +138,14 @@ function extractImageMetadata(bytes, sourceType) {
     return extractPngMetadata(bytes);
   }
 
+  if (isWebp(bytes, sourceType)) {
+    return extractWebpMetadata(bytes);
+  }
+
+  if (isIsoBmffImage(bytes, sourceType)) {
+    return extractIsoBmffMetadata(bytes, sourceType);
+  }
+
   return {
     items: [],
     orientation: 1,
@@ -162,6 +170,27 @@ function isPng(bytes, sourceType) {
     bytes[2] === 0x4e &&
     bytes[3] === 0x47
   );
+}
+
+function isWebp(bytes, sourceType) {
+  return (
+    sourceType === 'image/webp' ||
+    (bytes.byteLength >= 12 &&
+      readAscii(bytes, 0, 4) === 'RIFF' &&
+      readAscii(bytes, 8, 4) === 'WEBP')
+  );
+}
+
+function isIsoBmffImage(bytes, sourceType) {
+  if (sourceType === 'image/heic' || sourceType === 'image/heif' || sourceType === 'image/avif') {
+    return true;
+  }
+
+  if (bytes.byteLength < 12) {
+    return false;
+  }
+
+  return readAscii(bytes, 4, 4) === 'ftyp';
 }
 
 function extractJpegMetadata(bytes) {
@@ -194,7 +223,13 @@ function extractJpegMetadata(bytes) {
       items.push(...exif.items);
       orientation = exif.orientation || orientation;
     } else if (marker === 0xe1 && readAscii(bytes, dataOffset, Math.min(dataLength, 29)).startsWith('http://ns.adobe.com/xap/1.0/')) {
-      genericBlocks.add('Bloc XMP');
+      const xmpText = UTF8_DECODER.decode(bytes.subarray(dataOffset + 29, dataOffset + dataLength));
+      const xmpItems = extractXmpItemsFromText(xmpText);
+      if (xmpItems.length) {
+        items.push(...xmpItems);
+      } else {
+        genericBlocks.add('Bloc XMP');
+      }
     } else if (marker === 0xed) {
       genericBlocks.add('Bloc Photoshop/IPTC');
     } else if (marker === 0xe2 && readAscii(bytes, dataOffset, Math.min(dataLength, 12)).startsWith('ICC_PROFILE')) {
@@ -235,9 +270,11 @@ function extractPngMetadata(bytes) {
         items.push(text);
       }
     } else if (type === 'iTXt') {
-      const text = parsePngInternationalTextChunk(bytes.subarray(dataOffset, dataOffset + length));
-      if (text) {
-        items.push(text);
+      const textItems = parsePngInternationalTextChunk(bytes.subarray(dataOffset, dataOffset + length));
+      if (Array.isArray(textItems)) {
+        items.push(...textItems);
+      } else if (textItems) {
+        items.push(textItems);
       }
     } else if (type === 'zTXt') {
       const keyword = readKeyword(bytes.subarray(dataOffset, dataOffset + length));
@@ -269,6 +306,347 @@ function extractPngMetadata(bytes) {
     orientation,
     formatLabel: 'PNG'
   };
+}
+
+function extractWebpMetadata(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const items = [];
+  const genericBlocks = new Set();
+  let orientation = 1;
+  let offset = 12;
+
+  while (offset + 8 <= view.byteLength) {
+    const chunkType = readAscii(bytes, offset, 4);
+    const chunkLength = view.getUint32(offset + 4, true);
+    const dataOffset = offset + 8;
+    const paddedLength = chunkLength + (chunkLength % 2);
+    const nextOffset = dataOffset + paddedLength;
+
+    if (dataOffset + chunkLength > view.byteLength) {
+      break;
+    }
+
+    if (chunkType === 'EXIF') {
+      const exif = parseExifProfile(view, dataOffset);
+      items.push(...exif.items);
+      orientation = exif.orientation || orientation;
+    } else if (chunkType === 'XMP ') {
+      const xmpText = UTF8_DECODER.decode(bytes.subarray(dataOffset, dataOffset + chunkLength));
+      const xmpItems = extractXmpItemsFromText(xmpText);
+      if (xmpItems.length) {
+        items.push(...xmpItems);
+      } else {
+        genericBlocks.add('Bloc XMP');
+      }
+    } else if (chunkType === 'ICCP') {
+      genericBlocks.add('Profil couleur ICC');
+    }
+
+    offset = nextOffset;
+  }
+
+  genericBlocks.forEach((label) => items.push({ label, value: 'present' }));
+
+  return {
+    items: dedupeMetadataItems(items),
+    orientation,
+    formatLabel: 'WEBP'
+  };
+}
+
+function extractIsoBmffMetadata(bytes, sourceType) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const topLevelBoxes = readIsoBoxes(view, 0, view.byteLength);
+  const ftypBox = topLevelBoxes.find((box) => box.type === 'ftyp');
+  const metaBox = topLevelBoxes.find((box) => box.type === 'meta');
+  const formatLabel = detectIsoBmffFormatLabel(view, ftypBox, sourceType);
+
+  if (!metaBox) {
+    return {
+      items: [],
+      orientation: 1,
+      formatLabel
+    };
+  }
+
+  const metaChildren = readIsoBoxes(view, metaBox.dataStart + 4, metaBox.dataEnd);
+  const itemInfos = parseIsoItemInfos(view, metaChildren.find((box) => box.type === 'iinf'));
+  const itemLocations = parseIsoItemLocations(view, metaChildren.find((box) => box.type === 'iloc'));
+  const idatBox = metaChildren.find((box) => box.type === 'idat');
+  const items = [];
+  let orientation = 1;
+
+  itemInfos.forEach((info, itemId) => {
+    const location = itemLocations.get(itemId);
+    if (!location) {
+      return;
+    }
+
+    const itemData = readIsoItemData(bytes, location, idatBox);
+    if (!itemData || !itemData.length) {
+      return;
+    }
+
+    if (info.itemType === 'Exif') {
+      const exif = parseExifItemPayload(itemData);
+      items.push(...exif.items);
+      orientation = exif.orientation || orientation;
+      return;
+    }
+
+    if (info.itemType === 'mime') {
+      const mimeType = String(info.contentType || '').toLowerCase();
+      if (mimeType.includes('xmp') || mimeType.includes('xml') || mimeType.includes('rdf')) {
+        const xmpText = UTF8_DECODER.decode(itemData);
+        const xmpItems = extractXmpItemsFromText(xmpText);
+        if (xmpItems.length) {
+          items.push(...xmpItems);
+        } else {
+          items.push({ label: 'Bloc XMP', value: 'present' });
+        }
+        return;
+      }
+
+      items.push({ label: 'Bloc metadata', value: info.contentType || 'present' });
+    }
+  });
+
+  return {
+    items: dedupeMetadataItems(items),
+    orientation,
+    formatLabel
+  };
+}
+
+function readIsoBoxes(view, start, end) {
+  const boxes = [];
+  let offset = start;
+
+  while (offset + 8 <= end) {
+    let size = view.getUint32(offset, false);
+    const type = readAsciiFromView(view, offset + 4, 4);
+    let headerSize = 8;
+
+    if (size === 1) {
+      if (offset + 16 > end) {
+        break;
+      }
+      size = Number(readUint64Be(view, offset + 8));
+      headerSize = 16;
+    } else if (size === 0) {
+      size = end - offset;
+    }
+
+    if (!size || size < headerSize || offset + size > end) {
+      break;
+    }
+
+    boxes.push({
+      type,
+      start: offset,
+      size,
+      headerSize,
+      dataStart: offset + headerSize,
+      dataEnd: offset + size
+    });
+
+    offset += size;
+  }
+
+  return boxes;
+}
+
+function detectIsoBmffFormatLabel(view, ftypBox, sourceType) {
+  const brands = [];
+
+  if (ftypBox && ftypBox.dataStart + 8 <= view.byteLength) {
+    const majorBrand = readAsciiFromView(view, ftypBox.dataStart, 4);
+    brands.push(majorBrand);
+
+    for (let offset = ftypBox.dataStart + 8; offset + 4 <= ftypBox.dataEnd; offset += 4) {
+      brands.push(readAsciiFromView(view, offset, 4));
+    }
+  }
+
+  if (sourceType === 'image/avif' || brands.some((brand) => brand === 'avif' || brand === 'avis')) {
+    return 'AVIF';
+  }
+
+  if (sourceType === 'image/heic' || brands.some((brand) => ['heic', 'heix', 'hevc', 'hevx'].includes(brand))) {
+    return 'HEIC';
+  }
+
+  if (sourceType === 'image/heif' || brands.some((brand) => ['mif1', 'msf1'].includes(brand))) {
+    return 'HEIF';
+  }
+
+  return sourceType.replace('image/', '').toUpperCase() || 'IMAGE';
+}
+
+function parseIsoItemInfos(view, iinfBox) {
+  const items = new Map();
+  if (!iinfBox || iinfBox.dataStart + 8 > view.byteLength) {
+    return items;
+  }
+
+  const version = view.getUint8(iinfBox.dataStart);
+  let cursor = iinfBox.dataStart + 4;
+  const entryCount = version === 0 ? view.getUint16(cursor, false) : view.getUint32(cursor, false);
+  cursor += version === 0 ? 2 : 4;
+
+  for (let index = 0; index < entryCount; index += 1) {
+    const childBoxes = readIsoBoxes(view, cursor, iinfBox.dataEnd);
+    const infeBox = childBoxes[0];
+    if (!infeBox || infeBox.type !== 'infe') {
+      break;
+    }
+
+    const info = parseIsoInfe(view, infeBox);
+    if (info) {
+      items.set(info.itemId, info);
+    }
+
+    cursor = infeBox.dataEnd;
+  }
+
+  return items;
+}
+
+function parseIsoInfe(view, infeBox) {
+  const version = view.getUint8(infeBox.dataStart);
+  let cursor = infeBox.dataStart + 4;
+
+  if (version < 2) {
+    return null;
+  }
+
+  const itemId = version === 3 ? view.getUint32(cursor, false) : view.getUint16(cursor, false);
+  cursor += version === 3 ? 4 : 2;
+  cursor += 2;
+
+  const itemType = readAsciiFromView(view, cursor, 4);
+  cursor += 4;
+
+  const nameField = readNullTerminatedAscii(view, cursor, infeBox.dataEnd);
+  cursor = nameField.nextOffset;
+  const info = {
+    itemId,
+    itemType,
+    itemName: nameField.value
+  };
+
+  if (itemType === 'mime') {
+    const contentType = readNullTerminatedAscii(view, cursor, infeBox.dataEnd);
+    cursor = contentType.nextOffset;
+    const contentEncoding = readNullTerminatedAscii(view, cursor, infeBox.dataEnd);
+    info.contentType = contentType.value;
+    info.contentEncoding = contentEncoding.value;
+  }
+
+  return info;
+}
+
+function parseIsoItemLocations(view, ilocBox) {
+  const locations = new Map();
+  if (!ilocBox || ilocBox.dataStart + 8 > view.byteLength) {
+    return locations;
+  }
+
+  const version = view.getUint8(ilocBox.dataStart);
+  let cursor = ilocBox.dataStart + 4;
+  const sizeByteA = view.getUint8(cursor);
+  const sizeByteB = view.getUint8(cursor + 1);
+  cursor += 2;
+
+  const offsetSize = sizeByteA >> 4;
+  const lengthSize = sizeByteA & 0x0f;
+  const baseOffsetSize = sizeByteB >> 4;
+  const indexSize = version === 1 || version === 2 ? sizeByteB & 0x0f : 0;
+  const itemCount = version < 2 ? view.getUint16(cursor, false) : view.getUint32(cursor, false);
+  cursor += version < 2 ? 2 : 4;
+
+  for (let index = 0; index < itemCount; index += 1) {
+    const itemId = version < 2 ? view.getUint16(cursor, false) : view.getUint32(cursor, false);
+    cursor += version < 2 ? 2 : 4;
+
+    let constructionMethod = 0;
+    if (version === 1 || version === 2) {
+      constructionMethod = view.getUint16(cursor, false) & 0x000f;
+      cursor += 2;
+    }
+
+    cursor += 2;
+    const baseOffset = readUintBe(view, cursor, baseOffsetSize);
+    cursor += baseOffsetSize;
+    const extentCount = view.getUint16(cursor, false);
+    cursor += 2;
+    const extents = [];
+
+    for (let extentIndex = 0; extentIndex < extentCount; extentIndex += 1) {
+      if ((version === 1 || version === 2) && indexSize > 0) {
+        cursor += indexSize;
+      }
+
+      const extentOffset = readUintBe(view, cursor, offsetSize);
+      cursor += offsetSize;
+      const extentLength = readUintBe(view, cursor, lengthSize);
+      cursor += lengthSize;
+      extents.push({ extentOffset, extentLength });
+    }
+
+    locations.set(itemId, {
+      constructionMethod,
+      baseOffset,
+      extents
+    });
+  }
+
+  return locations;
+}
+
+function readIsoItemData(bytes, location, idatBox) {
+  const parts = [];
+  let totalLength = 0;
+
+  for (const extent of location.extents) {
+    const baseStart = location.constructionMethod === 1 && idatBox ? idatBox.dataStart : 0;
+    const start = baseStart + location.baseOffset + extent.extentOffset;
+    const end = start + extent.extentLength;
+
+    if (start < 0 || end > bytes.byteLength || end < start) {
+      return null;
+    }
+
+    const slice = bytes.subarray(start, end);
+    parts.push(slice);
+    totalLength += slice.byteLength;
+  }
+
+  const data = new Uint8Array(totalLength);
+  let cursor = 0;
+
+  parts.forEach((part) => {
+    data.set(part, cursor);
+    cursor += part.byteLength;
+  });
+
+  return data;
+}
+
+function parseExifItemPayload(itemBytes) {
+  if (itemBytes.byteLength < 4) {
+    return { items: [], orientation: 1 };
+  }
+
+  const localView = new DataView(itemBytes.buffer, itemBytes.byteOffset, itemBytes.byteLength);
+  const tiffOffset = localView.getUint32(0, false);
+  const tiffStart = 4 + tiffOffset;
+
+  if (tiffStart + 8 > localView.byteLength) {
+    return { items: [], orientation: 1 };
+  }
+
+  return parseExifProfile(localView, tiffStart);
 }
 
 function parseExifProfile(view, tiffStart) {
@@ -879,7 +1257,19 @@ function parsePngInternationalTextChunk(bytes) {
     return { label: `PNG ${keyword}`, value: 'texte compresse present' };
   }
 
-  return { label: `PNG ${keyword}`, value: UTF8_DECODER.decode(textBytes).trim() };
+  const value = UTF8_DECODER.decode(textBytes).trim();
+  if (!value) {
+    return null;
+  }
+
+  if (keyword.toLowerCase().includes('xmp')) {
+    const xmpItems = extractXmpItemsFromText(value);
+    if (xmpItems.length) {
+      return xmpItems;
+    }
+  }
+
+  return { label: `PNG ${keyword}`, value };
 }
 
 function readKeyword(bytes) {
@@ -889,6 +1279,74 @@ function readKeyword(bytes) {
   }
 
   return ASCII_DECODER.decode(bytes.subarray(0, separator)).trim();
+}
+
+function extractXmpItemsFromText(text) {
+  const source = String(text || '').trim();
+  if (!source) {
+    return [];
+  }
+
+  const items = [];
+  const candidates = [
+    { label: 'Marque appareil', patterns: ['tiff:Make', 'exifEX:LensMake'] },
+    { label: 'Modele appareil', patterns: ['tiff:Model'] },
+    { label: 'Logiciel', patterns: ['xmp:CreatorTool', 'tiff:Software'] },
+    { label: 'Date originale', patterns: ['exif:DateTimeOriginal', 'photoshop:DateCreated', 'xmp:CreateDate'] },
+    { label: 'Date image', patterns: ['xmp:ModifyDate'] },
+    { label: 'Auteur', patterns: ['dc:creator', 'photoshop:Author'] },
+    { label: 'Commentaire', patterns: ['dc:description'] },
+    { label: 'Latitude GPS', patterns: ['exif:GPSLatitude'] },
+    { label: 'Longitude GPS', patterns: ['exif:GPSLongitude'] },
+    { label: 'Altitude GPS', patterns: ['exif:GPSAltitude'] },
+    { label: 'Orientation image', patterns: ['tiff:Orientation'] }
+  ];
+
+  candidates.forEach(({ label, patterns }) => {
+    for (const pattern of patterns) {
+      const value = matchXmpField(source, pattern);
+      if (value) {
+        items.push({ label, value });
+        break;
+      }
+    }
+  });
+
+  return dedupeMetadataItems(items);
+}
+
+function matchXmpField(source, fieldName) {
+  const escaped = escapeRegExp(fieldName);
+  const attributeMatch = new RegExp(`${escaped}="([^"]+)"`, 'i').exec(source);
+  if (attributeMatch?.[1]) {
+    return cleanupXmpValue(attributeMatch[1]);
+  }
+
+  const elementMatch = new RegExp(`<${escaped}>([\\s\\S]*?)<\\/${escaped}>`, 'i').exec(source);
+  if (elementMatch?.[1]) {
+    return cleanupXmpValue(stripXmlTags(elementMatch[1]));
+  }
+
+  const seqMatch = new RegExp(`<${escaped}>[\\s\\S]*?<rdf:li>([\\s\\S]*?)<\\/rdf:li>[\\s\\S]*?<\\/${escaped}>`, 'i').exec(source);
+  if (seqMatch?.[1]) {
+    return cleanupXmpValue(stripXmlTags(seqMatch[1]));
+  }
+
+  return '';
+}
+
+function cleanupXmpValue(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripXmlTags(value) {
+  return String(value || '').replace(/<[^>]+>/g, ' ');
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function formatPngTime(bytes) {
@@ -909,6 +1367,37 @@ function readAscii(bytes, offset, length) {
 
 function readAsciiFromView(view, offset, length) {
   return ASCII_DECODER.decode(new Uint8Array(view.buffer, view.byteOffset + offset, length));
+}
+
+function readUintBe(view, offset, size) {
+  if (!size) {
+    return 0;
+  }
+
+  let value = 0;
+  for (let index = 0; index < size; index += 1) {
+    value = value * 256 + view.getUint8(offset + index);
+  }
+  return value;
+}
+
+function readUint64Be(view, offset) {
+  const high = view.getUint32(offset, false);
+  const low = view.getUint32(offset + 4, false);
+  return high * 2 ** 32 + low;
+}
+
+function readNullTerminatedAscii(view, offset, end) {
+  let cursor = offset;
+  while (cursor < end && view.getUint8(cursor) !== 0) {
+    cursor += 1;
+  }
+
+  const value = cursor > offset ? readAsciiFromView(view, offset, cursor - offset) : '';
+  return {
+    value,
+    nextOffset: Math.min(cursor + 1, end)
+  };
 }
 
 function pad2(value) {

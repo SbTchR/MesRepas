@@ -105,6 +105,7 @@ Quand l'app sera sur GitHub Pages, ajoute aussi ton domaine `https://<utilisateu
 
 - Les nouvelles photos ajoutees depuis `eleve.html` sont analysees puis reencodees localement avant tout envoi.
 - L'application affiche d'abord les metadonnees detectees qui seront retirees, par exemple: appareil, date, GPS, logiciel, orientation ou profil couleur.
+- Les apercus pedagogiques couvrent maintenant aussi les formats frequents des smartphones au-dela de `JPEG` et `PNG`, notamment `WEBP`, `HEIC/HEIF` et `AVIF`, quand les metadonnees sont presentes dans des blocs lisibles (`EXIF` ou `XMP`).
 - La photo n'entre dans le brouillon qu'apres validation de la version nettoyee.
 - Le reencodage via canvas supprime aussi les blocs caches non affichables simplement. Si aucune metadonnee lisible n'est trouvee, l'app l'indique mais nettoie quand meme l'image.
 

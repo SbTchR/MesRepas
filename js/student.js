@@ -402,7 +402,7 @@ function renderPhotoReview() {
       note.className = 'privacy-review-note';
       note.textContent =
         item.formatLabel && !['JPEG', 'PNG'].includes(item.formatLabel)
-          ? `Aucune metadonnee lisible n'a ete detectee dans ce fichier ${item.formatLabel}. Sur iPhone, le navigateur peut fournir une image deja simplifiee ou dans un format moins facile a lire, mais l'image sera quand meme reencodee pour retirer les balises cachees.`
+          ? `Aucune metadonnee lisible n'a ete detectee dans ce fichier ${item.formatLabel}. Selon le telephone et le navigateur, il peut deja etre simplifie ou ne contenir aucune information visible, mais l'image sera quand meme reencodee pour retirer les balises cachees.`
           : "Aucune metadonnee lisible n'a ete detectee, mais l'image sera quand meme reencodee pour retirer les balises cachees.";
       details.appendChild(note);
     }
