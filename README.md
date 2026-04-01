@@ -94,6 +94,20 @@ Quand l'app sera sur GitHub Pages, ajoute aussi ton domaine `https://<utilisateu
 - `response.answers[]`: `{ criterionId, criterionText, text }`
 - `teacherEvaluationFeedback` (`teacherFeedback` conservé pour compatibilité)
 
+## Anonymisation vocale locale
+
+- Les audios enregistres depuis `eleve.html` sont modifies localement dans le navigateur avant d'etre ajoutes au brouillon puis envoyes vers Firebase.
+- Le traitement applique un decalage de hauteur, un filtrage de timbre, une compression et un tres leger bruit de masquage, puis reencode le resultat en `audio/wav` mono.
+- Si le navigateur ne sait pas faire ce traitement localement, le bouton d'enregistrement audio est desactive pour eviter l'envoi de la voix brute.
+- Cette mesure reduit fortement l'identifiabilite de la voix, mais ne constitue pas a elle seule une garantie juridique d'anonymisation irreversible. Pour un cadrage conforme a vos obligations, il faut valider le dispositif avec votre service de protection des donnees.
+
+## Nettoyage local des photos
+
+- Les nouvelles photos ajoutees depuis `eleve.html` sont analysees puis reencodees localement avant tout envoi.
+- L'application affiche d'abord les metadonnees detectees qui seront retirees, par exemple: appareil, date, GPS, logiciel, orientation ou profil couleur.
+- La photo n'entre dans le brouillon qu'apres validation de la version nettoyee.
+- Le reencodage via canvas supprime aussi les blocs caches non affichables simplement. Si aucune metadonnee lisible n'est trouvee, l'app l'indique mais nettoie quand meme l'image.
+
 ## Nom proposé
 
 Nom d'app proposé: **RepasParle**

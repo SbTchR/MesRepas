@@ -25,6 +25,9 @@ import {
   initImageLightbox
 } from './app-common.js';
 
+import { anonymizeAudioFile, supportsVoiceAnonymization } from './audio-privacy.js';
+import { prepareSanitizedImage, supportsImageSanitization } from './image-privacy.js';
+
 const elements = {
   firebaseWarning: document.getElementById('firebaseWarning'),
   refreshBtn: document.getElementById('refreshStudentBtn'),
@@ -37,10 +40,16 @@ const elements = {
   existingAudiosTitle: document.getElementById('existingAudiosTitle'),
   existingAudioList: document.getElementById('existingAudioList'),
   photoInput: document.getElementById('photoInput'),
+  photoPrivacyHint: document.getElementById('photoPrivacyHint'),
+  photoPrivacyReview: document.getElementById('photoPrivacyReview'),
+  photoPrivacyReviewList: document.getElementById('photoPrivacyReviewList'),
+  applyPhotoReviewBtn: document.getElementById('applyPhotoReviewBtn'),
+  cancelPhotoReviewBtn: document.getElementById('cancelPhotoReviewBtn'),
   photoDraftList: document.getElementById('photoDraftList'),
   audioInput: document.getElementById('audioInput'),
   audioDraftList: document.getElementById('audioDraftList'),
   recordBtn: document.getElementById('recordBtn'),
+  voicePrivacyHint: document.getElementById('voicePrivacyHint'),
   cancelEditMealBtn: document.getElementById('cancelEditMealBtn'),
   clearDraftBtn: document.getElementById('clearDraftBtn'),
   saveMealBtn: document.getElementById('saveMealBtn'),
@@ -66,7 +75,11 @@ const state = {
   editingExistingAudios: [],
   mediaRecorder: null,
   recorderStream: null,
-  recordingChunks: []
+  recordingChunks: [],
+  recordingMimeType: '',
+  processingAudio: false,
+  processingPhotos: false,
+  pendingPhotoReview: []
 };
 
 function getSelectedStudent() {
@@ -114,6 +127,92 @@ function setSaveButtonLabel(label) {
   elements.saveMealBtn.textContent = label;
 }
 
+function hasPendingPhotoReview() {
+  return state.pendingPhotoReview.length > 0;
+}
+
+function isProcessingMedia() {
+  return state.processingAudio || state.processingPhotos;
+}
+
+function isRecordingAudio() {
+  return Boolean(state.mediaRecorder && state.mediaRecorder.state === 'recording');
+}
+
+function syncRecordButtonLabel() {
+  if (!elements.recordBtn) {
+    return;
+  }
+
+  if (state.processingAudio) {
+    elements.recordBtn.textContent = 'Traitement audio...';
+    return;
+  }
+
+  elements.recordBtn.textContent = isRecordingAudio() ? 'Stop audio' : 'Démarrer audio';
+}
+
+function updatePhotoPrivacyHint() {
+  if (!elements.photoPrivacyHint) {
+    return;
+  }
+
+  let message = 'La photo est nettoyee sur cet appareil. Les infos cachees seront affichees avant ajout.';
+  let warning = false;
+
+  if (!supportsImageSanitization()) {
+    message = "Cet appareil ne peut pas nettoyer les photos localement. L'ajout de nouvelles photos est desactive pour eviter l'envoi des metadonnees.";
+    warning = true;
+  } else if (hasPendingPhotoReview()) {
+    message = 'Lis les infos retirees ci-dessous puis ajoute la photo propre.';
+  }
+
+  elements.photoPrivacyHint.textContent = message;
+  elements.photoPrivacyHint.classList.toggle('is-warning', warning);
+}
+
+function updateVoicePrivacyHint() {
+  if (!elements.voicePrivacyHint) {
+    return;
+  }
+
+  let message = "L'audio enregistré ici est transformé sur cet appareil avant l'envoi.";
+  let warning = false;
+
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    message = "Cet appareil ne permet pas l'enregistrement audio direct.";
+    warning = true;
+  } else if (!supportsVoiceAnonymization()) {
+    message =
+      "Cet appareil ne peut pas anonymiser la voix localement. L'enregistrement audio direct est désactivé pour éviter l'envoi de la voix brute.";
+    warning = true;
+  }
+
+  elements.voicePrivacyHint.textContent = message;
+  elements.voicePrivacyHint.classList.toggle('is-warning', warning);
+}
+
+function pickRecordingMimeType() {
+  if (!window.MediaRecorder || typeof window.MediaRecorder.isTypeSupported !== 'function') {
+    return '';
+  }
+
+  const candidates = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm'];
+  return candidates.find((mimeType) => window.MediaRecorder.isTypeSupported(mimeType)) || '';
+}
+
+function releaseRecorder() {
+  if (state.recorderStream) {
+    state.recorderStream.getTracks().forEach((track) => track.stop());
+  }
+
+  state.recorderStream = null;
+  state.mediaRecorder = null;
+  state.recordingChunks = [];
+  state.recordingMimeType = '';
+  syncRecordButtonLabel();
+}
+
 function disableAll() {
   [
     elements.studentSelect,
@@ -151,13 +250,35 @@ function updateEditModeUI() {
 
 function updateControlsState() {
   const canWork = Boolean(state.selectedStudentId);
-  elements.mealTitleInput.disabled = !canWork;
-  elements.photoInput.disabled = !canWork;
-  elements.audioInput.disabled = !canWork;
-  elements.cancelEditMealBtn.disabled = !canWork;
-  elements.clearDraftBtn.disabled = !canWork;
-  elements.recordBtn.disabled = !canWork || !navigator.mediaDevices || !window.MediaRecorder;
-  elements.saveMealBtn.disabled = !isReadyForSave();
+  elements.studentSelect.disabled = isProcessingMedia() || hasPendingPhotoReview();
+  if (elements.refreshBtn) {
+    elements.refreshBtn.disabled = isProcessingMedia() || hasPendingPhotoReview();
+  }
+  elements.mealTitleInput.disabled = !canWork || isProcessingMedia() || hasPendingPhotoReview();
+  elements.photoInput.disabled =
+    !canWork || isProcessingMedia() || hasPendingPhotoReview() || !supportsImageSanitization();
+  if (elements.audioInput) {
+    elements.audioInput.disabled = !canWork || isProcessingMedia() || hasPendingPhotoReview();
+  }
+  elements.cancelEditMealBtn.disabled = !canWork || isProcessingMedia() || hasPendingPhotoReview();
+  elements.clearDraftBtn.disabled = !canWork || isProcessingMedia() || hasPendingPhotoReview();
+  elements.recordBtn.disabled =
+    !canWork ||
+    isProcessingMedia() ||
+    hasPendingPhotoReview() ||
+    !navigator.mediaDevices ||
+    !window.MediaRecorder ||
+    !supportsVoiceAnonymization();
+  elements.saveMealBtn.disabled = isProcessingMedia() || hasPendingPhotoReview() || !isReadyForSave();
+  if (elements.applyPhotoReviewBtn) {
+    elements.applyPhotoReviewBtn.disabled = isProcessingMedia() || !hasPendingPhotoReview();
+  }
+  if (elements.cancelPhotoReviewBtn) {
+    elements.cancelPhotoReviewBtn.disabled = isProcessingMedia() || !hasPendingPhotoReview();
+  }
+  syncRecordButtonLabel();
+  updatePhotoPrivacyHint();
+  updateVoicePrivacyHint();
 }
 
 function renderStudentSelect() {
@@ -193,6 +314,85 @@ function renderDraftPhotos() {
       })
     );
   });
+}
+
+function renderPhotoReview() {
+  if (!elements.photoPrivacyReview || !elements.photoPrivacyReviewList) {
+    return;
+  }
+
+  elements.photoPrivacyReviewList.innerHTML = '';
+
+  if (!hasPendingPhotoReview()) {
+    elements.photoPrivacyReview.classList.add('hidden');
+    return;
+  }
+
+  state.pendingPhotoReview.forEach((item, index) => {
+    const card = document.createElement('article');
+    card.className = 'privacy-review-card';
+
+    const media = document.createElement('div');
+    media.className = 'privacy-review-media';
+
+    const img = document.createElement('img');
+    const previewUrl = URL.createObjectURL(item.sanitizedFile);
+    img.src = previewUrl;
+    img.alt = item.originalName || `Photo ${index + 1}`;
+    img.addEventListener(
+      'load',
+      () => {
+        URL.revokeObjectURL(previewUrl);
+      },
+      { once: true }
+    );
+    img.addEventListener(
+      'error',
+      () => {
+        URL.revokeObjectURL(previewUrl);
+      },
+      { once: true }
+    );
+
+    const fileInfo = document.createElement('div');
+    fileInfo.className = 'privacy-review-file';
+
+    const title = document.createElement('strong');
+    title.textContent = item.originalName || `Photo ${index + 1}`;
+
+    const meta = document.createElement('p');
+    meta.className = 'meta';
+    meta.textContent = `${item.formatLabel || 'Image'} nettoyee localement`;
+
+    fileInfo.append(title, meta);
+    media.append(img, fileInfo);
+
+    const details = document.createElement('div');
+
+    if (item.removedMetadata.length) {
+      const list = document.createElement('ul');
+      list.className = 'privacy-review-meta-list';
+
+      item.removedMetadata.forEach((entry) => {
+        const li = document.createElement('li');
+        li.textContent = `${entry.label}: ${entry.value}`;
+        list.appendChild(li);
+      });
+
+      details.appendChild(list);
+    } else {
+      const note = document.createElement('p');
+      note.className = 'privacy-review-note';
+      note.textContent =
+        "Aucune metadonnee lisible n'a ete detectee, mais l'image sera quand meme reencodee pour retirer les balises cachees.";
+      details.appendChild(note);
+    }
+
+    card.append(media, details);
+    elements.photoPrivacyReviewList.appendChild(card);
+  });
+
+  elements.photoPrivacyReview.classList.remove('hidden');
 }
 
 function renderDraftAudios() {
@@ -288,11 +488,13 @@ function renderExistingEditMedia() {
 function clearDraft({ clearLabel = false } = {}) {
   state.draftPhotos = [];
   state.draftAudios = [];
+  state.pendingPhotoReview = [];
 
   if (clearLabel) {
     elements.mealTitleInput.value = '';
   }
 
+  renderPhotoReview();
   renderDraftPhotos();
   renderDraftAudios();
   updateControlsState();
@@ -303,11 +505,13 @@ function resetEditMeal({ clearLabel = false } = {}) {
   state.editingOriginalMeal = null;
   state.editingExistingPhotos = [];
   state.editingExistingAudios = [];
+  state.pendingPhotoReview = [];
 
   if (clearLabel) {
     elements.mealTitleInput.value = '';
   }
 
+  renderPhotoReview();
   renderExistingEditMedia();
   updateEditModeUI();
   updateControlsState();
@@ -686,71 +890,210 @@ async function loadAll() {
 }
 
 function bindFileInputs() {
-  elements.photoInput.addEventListener('change', (event) => {
+  elements.photoInput.addEventListener('change', async (event) => {
     const files = [...(event.target.files || [])].filter((file) => file.type.startsWith('image/'));
-    state.draftPhotos.push(...files);
     elements.photoInput.value = '';
-    renderDraftPhotos();
-    updateControlsState();
+    await preparePhotosForReview(files);
   });
 
-  elements.audioInput.addEventListener('change', (event) => {
-    const files = [...(event.target.files || [])].filter((file) => file.type.startsWith('audio/'));
-    state.draftAudios.push(...files);
-    elements.audioInput.value = '';
-    renderDraftAudios();
+  if (elements.audioInput) {
+    elements.audioInput.addEventListener('change', async (event) => {
+      const files = [...(event.target.files || [])].filter((file) => file.type.startsWith('audio/'));
+      elements.audioInput.value = '';
+      await addAudioFilesToDraft(files);
+    });
+  }
+}
+
+async function preparePhotosForReview(files) {
+  if (!files.length) {
+    return;
+  }
+
+  state.processingPhotos = true;
+  state.pendingPhotoReview = [];
+  renderPhotoReview();
+  updateControlsState();
+
+  const prepared = [];
+  let failedCount = 0;
+
+  try {
+    for (const file of files) {
+      try {
+        const sanitized = await prepareSanitizedImage(file);
+        prepared.push({
+          originalName: file.name,
+          sanitizedFile: sanitized.sanitizedFile,
+          removedMetadata: sanitized.removedMetadata,
+          formatLabel: sanitized.formatLabel
+        });
+      } catch (error) {
+        failedCount += 1;
+        console.error('Image sanitization failed:', file?.name, error);
+      }
+    }
+
+    state.pendingPhotoReview = prepared;
+    renderPhotoReview();
+
+    if (prepared.length) {
+      const successMessage = failedCount
+        ? `${prepared.length} photo(s) pretes. ${failedCount} impossible(s).`
+        : 'Lis les infos retirees, puis ajoute la photo propre.';
+      showToast(successMessage);
+    } else {
+      showToast('Aucune photo n a pu etre nettoyee.', 'error');
+    }
+  } finally {
+    state.processingPhotos = false;
     updateControlsState();
-  });
+  }
+}
+
+function applyPendingPhotoReview() {
+  if (!hasPendingPhotoReview()) {
+    return;
+  }
+
+  state.draftPhotos.push(...state.pendingPhotoReview.map((item) => item.sanitizedFile));
+  state.pendingPhotoReview = [];
+  renderPhotoReview();
+  renderDraftPhotos();
+  updateControlsState();
+  showToast('Photo propre ajoutee');
+}
+
+function cancelPendingPhotoReview() {
+  if (!hasPendingPhotoReview()) {
+    return;
+  }
+
+  state.pendingPhotoReview = [];
+  renderPhotoReview();
+  updateControlsState();
+  showToast('Ajout photo annule');
+}
+
+async function addAudioFilesToDraft(files) {
+  if (!files.length) {
+    return;
+  }
+
+  state.processingAudio = true;
+  updateControlsState();
+
+  let addedCount = 0;
+
+  try {
+    for (const file of files) {
+      const anonymizedFile = await anonymizeAudioFile(file);
+      state.draftAudios.push(anonymizedFile);
+      addedCount += 1;
+    }
+
+    renderDraftAudios();
+
+    if (addedCount) {
+      showToast(addedCount > 1 ? `${addedCount} audios anonymisés ajoutés` : 'Audio anonymisé ajouté');
+    }
+  } catch (error) {
+    console.error('Audio anonymization failed:', error);
+    showToast('Transformation audio impossible. Audio non conservé.', 'error');
+  } finally {
+    state.processingAudio = false;
+    updateControlsState();
+  }
+}
+
+async function finalizeRecordedAudio(chunks, mimeType) {
+  if (!chunks.length) {
+    showToast('Audio vide', 'error');
+    return;
+  }
+
+  state.processingAudio = true;
+  updateControlsState();
+
+  try {
+    const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+    const extension = mimeType?.includes('ogg') ? 'ogg' : mimeType?.includes('mp4') ? 'm4a' : 'webm';
+    const rawFile = new File([blob], `audio-${Date.now()}.${extension}`, {
+      type: mimeType || 'audio/webm',
+      lastModified: Date.now()
+    });
+    const anonymizedFile = await anonymizeAudioFile(rawFile);
+
+    state.draftAudios.push(anonymizedFile);
+    renderDraftAudios();
+    showToast('Audio anonymisé ajouté');
+  } catch (error) {
+    console.error('Recorded audio anonymization failed:', error);
+    showToast('Transformation audio impossible. Audio non conservé.', 'error');
+  } finally {
+    state.processingAudio = false;
+    updateControlsState();
+  }
 }
 
 async function startRecording() {
-  if (!navigator.mediaDevices || !window.MediaRecorder) {
-    showToast('Audio direct non dispo. Utilise fichier audio.', 'error');
+  if (!navigator.mediaDevices || !window.MediaRecorder || !supportsVoiceAnonymization()) {
+    showToast("Enregistrement audio direct indisponible sur cet appareil.", 'error');
     return;
   }
 
   try {
-    state.recorderStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    state.recorderStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
     state.recordingChunks = [];
-    state.mediaRecorder = new MediaRecorder(state.recorderStream);
+    state.recordingMimeType = pickRecordingMimeType();
+    state.mediaRecorder = state.recordingMimeType
+      ? new MediaRecorder(state.recorderStream, { mimeType: state.recordingMimeType })
+      : new MediaRecorder(state.recorderStream);
+    const recorder = state.mediaRecorder;
 
-    state.mediaRecorder.ondataavailable = (event) => {
+    recorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
         state.recordingChunks.push(event.data);
       }
     };
 
-    state.mediaRecorder.onstop = () => {
-      const mimeType = state.mediaRecorder?.mimeType || 'audio/webm';
-      const blob = new Blob(state.recordingChunks, { type: mimeType });
-      const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'm4a' : 'webm';
-      const file = new File([blob], `audio-${Date.now()}.${ext}`, { type: mimeType });
-      state.draftAudios.push(file);
-      renderDraftAudios();
+    recorder.onerror = (event) => {
+      console.error('MediaRecorder error:', event?.error || event);
+      releaseRecorder();
+      state.processingAudio = false;
       updateControlsState();
-
-      if (state.recorderStream) {
-        state.recorderStream.getTracks().forEach((track) => track.stop());
-      }
-      state.recorderStream = null;
-      state.mediaRecorder = null;
-      state.recordingChunks = [];
-      elements.recordBtn.textContent = 'Démarrer audio';
+      showToast('Erreur enregistrement micro', 'error');
     };
 
-    state.mediaRecorder.start();
-    elements.recordBtn.textContent = 'Stop audio';
+    recorder.onstop = async () => {
+      const chunks = [...state.recordingChunks];
+      const mimeType = state.recordingMimeType || recorder.mimeType || 'audio/webm';
+      releaseRecorder();
+      await finalizeRecordedAudio(chunks, mimeType);
+    };
+
+    recorder.start();
+    updateControlsState();
     showToast('Enregistrement...');
   } catch (error) {
     console.error(error);
+    releaseRecorder();
     showToast('Micro refusé', 'error');
   }
 }
 
 function stopRecording() {
   if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+    state.processingAudio = true;
+    updateControlsState();
     state.mediaRecorder.stop();
-    showToast('Audio ajouté');
+    showToast('Transformation locale...');
   }
 }
 
@@ -1029,6 +1372,14 @@ function bindEvents() {
     }
   });
 
+  if (elements.applyPhotoReviewBtn) {
+    elements.applyPhotoReviewBtn.addEventListener('click', applyPendingPhotoReview);
+  }
+
+  if (elements.cancelPhotoReviewBtn) {
+    elements.cancelPhotoReviewBtn.addEventListener('click', cancelPendingPhotoReview);
+  }
+
   elements.saveMealBtn.addEventListener('click', handleSaveMeal);
 
   elements.mealsList.addEventListener('click', async (event) => {
@@ -1074,6 +1425,7 @@ async function init() {
   bindEvents();
   initImageLightbox();
   updateEditModeUI();
+  renderPhotoReview();
 
   if (!initFirebaseGuard()) {
     return;

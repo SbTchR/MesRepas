@@ -48,6 +48,16 @@
 
           <label class="file-label" for="photoInput">Ajouter photo(s)</label>
           <input id="photoInput" type="file" accept="image/*" capture="environment" multiple />
+          <p id="photoPrivacyHint" class="hint hint-photo" aria-live="polite"></p>
+          <section id="photoPrivacyReview" class="privacy-review hidden" aria-live="polite">
+            <p class="privacy-review-title">Infos cachees retirees avant ajout</p>
+            <p class="hint">Lis ces informations, puis ajoute seulement la photo nettoyee.</p>
+            <div id="photoPrivacyReviewList" class="privacy-review-list"></div>
+            <div class="row-wrap actions-end privacy-review-actions">
+              <button id="cancelPhotoReviewBtn" class="ghost-btn" type="button">Annuler</button>
+              <button id="applyPhotoReviewBtn" class="primary-btn" type="button">Ajouter photo propre</button>
+            </div>
+          </section>
           <div id="photoDraftList" class="media-grid"></div>
         </div>
 
@@ -59,6 +69,7 @@
           <div class="row-wrap">
             <button id="recordBtn" class="accent-btn" type="button">Démarrer audio</button>
           </div>
+          <p id="voicePrivacyHint" class="hint hint-voice" aria-live="polite"></p>
           <div id="audioDraftList" class="audio-list"></div>
         </div>
 
